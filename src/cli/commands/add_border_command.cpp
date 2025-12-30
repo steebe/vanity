@@ -71,7 +71,7 @@ public:
     }
 
     const char* name() const override {
-        return "add_border";
+        return "border";
     }
 
     const char* description() const override {
