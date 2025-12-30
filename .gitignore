@@ -1,0 +1,26 @@
+# Build artifacts
+build/
+bin/
+lib/
+!src/lib/
+
+# Backup files
+*.bak
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test images (optional - uncomment if you don't want to track test images)
+scratch/
+*.png
+*.jpg
+*.jpeg
+*.bmp
