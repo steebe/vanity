@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <optional>
 
 namespace vanity {
 
@@ -20,7 +21,7 @@ private:
         return ext == ".jpg" || ext == ".jpeg" || ext == ".png";
     }
 
-    CommandResult process_single_file(const char* input_path, const char* output_path, int border_width) {
+    CommandResult process_single_file(const char* input_path, const char* output_path, int border_width, bool inner_border) {
         // Load image
         int width, height, channels;
         LoadedImage img = LoadedImage::load(input_path, width, height, channels);
@@ -36,16 +37,40 @@ private:
         std::cout << "Loaded image: " << width << "x" << height
                   << " with " << channels << " channels\n";
 
-        // Calculate new dimensions
+        // If inner border is requested, first add a 10px black border
+        unsigned char* current_data = img.get();
+        int current_width = width;
+        int current_height = height;
+        std::optional<ImageBuffer> inner_buffer;
+
+        if (inner_border) {
+            const int inner_border_width = 10;
+            int inner_width, inner_height;
+            calculate_bordered_dimensions(width, height, inner_border_width, inner_width, inner_height);
+
+            inner_buffer.emplace(inner_width, inner_height, channels);
+            unsigned char black[4] = {0, 0, 0, 255};
+
+            if (!add_border(img.get(), width, height, channels, inner_buffer->get(), inner_border_width, black)) {
+                return {1, "Error: Failed to add inner border"};
+            }
+
+            current_data = inner_buffer->get();
+            current_width = inner_width;
+            current_height = inner_height;
+            std::cout << "Added 10px black inner border\n";
+        }
+
+        // Calculate new dimensions for white border
         int new_width, new_height;
-        calculate_bordered_dimensions(width, height, border_width, new_width, new_height);
+        calculate_bordered_dimensions(current_width, current_height, border_width, new_width, new_height);
 
         // Create output buffer
         ImageBuffer output(new_width, new_height, channels);
 
         // Add white border
         unsigned char white[4] = {255, 255, 255, 255};
-        if (!add_border(img.get(), width, height, channels, output.get(), border_width, white)) {
+        if (!add_border(current_data, current_width, current_height, channels, output.get(), border_width, white)) {
             return {1, "Error: Failed to add border"};
         }
 
@@ -64,19 +89,30 @@ public:
     CommandResult execute(int argc, char* argv[]) override {
         namespace fs = std::filesystem;
 
+        // Check for --inner flag
+        bool inner_border = false;
+        std::vector<std::string> args;
+        for (int i = 1; i < argc; i++) {
+            if (std::string(argv[i]) == "--inner") {
+                inner_border = true;
+            } else {
+                args.push_back(argv[i]);
+            }
+        }
+
         // Support two modes:
-        // 1. File mode: vanity border <input_image> <output_image> <border_width>
-        // 2. Directory mode: vanity border <directory> <border_width>
-        if (argc != 3 && argc != 4) {
+        // 1. File mode: vanity border <input_image> <output_image> <border_width> [--inner]
+        // 2. Directory mode: vanity border <directory> <border_width> [--inner]
+        if (args.size() != 2 && args.size() != 3) {
             print_usage(argv[0]);
             return {1, ""};
         }
 
         // Check if this is directory mode (2 arguments) or file mode (3 arguments)
-        if (argc == 3) {
+        if (args.size() == 2) {
             // Directory mode
-            const char* dir_path = argv[1];
-            int border_width = std::atoi(argv[2]);
+            const char* dir_path = args[0].c_str();
+            int border_width = std::atoi(args[1].c_str());
 
             if (border_width <= 0) {
                 return {1, "Error: Border width must be a positive integer"};
@@ -104,6 +140,9 @@ public:
             }
 
             std::cout << "Found " << image_files.size() << " image file(s) to process\n";
+            if (inner_border) {
+                std::cout << "Inner border mode enabled (10px black border)\n";
+            }
 
             // Process each image file
             int success_count = 0;
@@ -120,7 +159,8 @@ public:
                 CommandResult result = process_single_file(
                     input_file.string().c_str(),
                     output_file.string().c_str(),
-                    border_width
+                    border_width,
+                    inner_border
                 );
 
                 if (result.exit_code == 0) {
@@ -136,22 +176,26 @@ public:
 
         } else {
             // File mode (original behavior)
-            const char* input_path = argv[1];
-            const char* output_path = argv[2];
-            int border_width = std::atoi(argv[3]);
+            const char* input_path = args[0].c_str();
+            const char* output_path = args[1].c_str();
+            int border_width = std::atoi(args[2].c_str());
 
             if (border_width <= 0) {
                 return {1, "Error: Border width must be a positive integer"};
             }
 
-            return process_single_file(input_path, output_path, border_width);
+            if (inner_border) {
+                std::cout << "Inner border mode enabled (10px black border)\n";
+            }
+
+            return process_single_file(input_path, output_path, border_width, inner_border);
         }
     }
 
     void print_usage(const char* program_name) const override {
         std::cout << "Usage:\n";
-        std::cout << "  " << program_name << " <input_image> <output_image> <border_width>\n";
-        std::cout << "  " << program_name << " <directory> <border_width>\n\n";
+        std::cout << "  " << program_name << " <input_image> <output_image> <border_width> [--inner]\n";
+        std::cout << "  " << program_name << " <directory> <border_width> [--inner]\n\n";
         std::cout << "File mode:\n";
         std::cout << "  input_image:  Path to the input image file\n";
         std::cout << "  output_image: Path to save the output image\n";
@@ -159,7 +203,9 @@ public:
         std::cout << "Directory mode:\n";
         std::cout << "  directory:    Path to directory containing images\n";
         std::cout << "  border_width: Width of the white border in pixels\n";
-        std::cout << "                (processes all JPEG and PNG files, saves as filename_vanity_<border_width>.ext)\n";
+        std::cout << "                (processes all JPEG and PNG files, saves as filename_vanity_<border_width>.ext)\n\n";
+        std::cout << "Options:\n";
+        std::cout << "  --inner:      Add a 10px black border on the inside of the white border\n";
     }
 
     const char* name() const override {
