@@ -37,24 +37,37 @@ set_target_properties(libvanity PROPERTIES OUTPUT_NAME vanity)
 target_include_directories(libvanity PUBLIC include)
 target_link_libraries(libvanity PUBLIC m)
 
-# CLI sources
+# Fetch external dependencies first
+include(FetchContent)
+
+# Fetch easyexif for EXIF parsing
+FetchContent_Declare(
+    easyexif
+    GIT_REPOSITORY https://github.com/mayanklahiri/easyexif.git
+    GIT_TAG master
+)
+FetchContent_MakeAvailable(easyexif)
+
+# CLI sources (after FetchContent so easyexif_SOURCE_DIR is available)
 set(CLI_SOURCES
     src/cli/main.cpp
     src/cli/command_registry.cpp
     src/cli/commands.cpp
     src/cli/commands/add_border_command.cpp
+    src/cli/commands/inspect_command.cpp
+    ${easyexif_SOURCE_DIR}/exif.cpp
 )
 
 # Create CLI executable
 add_executable(vanity ${CLI_SOURCES})
 target_link_libraries(vanity PRIVATE libvanity)
+target_include_directories(vanity PRIVATE ${easyexif_SOURCE_DIR})
 
 # Testing
 option(BUILD_TESTS "Build tests" ON)
 
 if(BUILD_TESTS)
     # FetchContent for Google Test
-    include(FetchContent)
     FetchContent_Declare(
         googletest
         GIT_REPOSITORY https://github.com/google/googletest.git
