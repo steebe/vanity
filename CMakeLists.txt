@@ -55,6 +55,7 @@ set(CLI_SOURCES
     src/cli/commands.cpp
     src/cli/commands/add_border_command.cpp
     src/cli/commands/inspect_command.cpp
+    src/cli/commands/instafy_command.cpp
     ${easyexif_SOURCE_DIR}/exif.cpp
 )
 
