@@ -57,21 +57,33 @@ namespace vanity
     }
 
     // Calculate final dimensions after scaling to fit Instagram width requirements
+    // total_border: combined border thickness (inner + outer) to reserve space for border
     void calculate_scaled_dimensions(int src_width, int src_height,
-                                     int &dst_width, int &dst_height) const
+                                     int &dst_width, int &dst_height,
+                                     int total_border = 0) const
     {
-      if (src_width > MAX_WIDTH)
+      // Account for border space in the target dimensions
+      int effective_max = MAX_WIDTH - 2 * total_border;
+      int effective_min = MIN_WIDTH - 2 * total_border;
+
+      // Ensure minimums stay reasonable
+      if (effective_max < 1)
+        effective_max = 1;
+      if (effective_min < 1)
+        effective_min = 1;
+
+      if (src_width > effective_max)
       {
-        // Scale down to max width
-        float scale = static_cast<float>(MAX_WIDTH) / src_width;
-        dst_width = MAX_WIDTH;
+        // Scale down to effective max width (leaving room for border)
+        float scale = static_cast<float>(effective_max) / src_width;
+        dst_width = effective_max;
         dst_height = static_cast<int>(std::round(src_height * scale));
       }
-      else if (src_width < MIN_WIDTH)
+      else if (src_width < effective_min)
       {
-        // Scale up to min width
-        float scale = static_cast<float>(MIN_WIDTH) / src_width;
-        dst_width = MIN_WIDTH;
+        // Scale up to effective min width
+        float scale = static_cast<float>(effective_min) / src_width;
+        dst_width = effective_min;
         dst_height = static_cast<int>(std::round(src_height * scale));
       }
       else
@@ -138,25 +150,64 @@ namespace vanity
         std::cout << "Aspect ratio within Instagram range, no padding needed\n";
       }
 
-      // Step 2: Add border if requested (before scaling so it fits within Instagram limits)
+      // Step 2: Scale to fit Instagram width requirements (reserving space for border)
+      // Inner border is asymmetric: 5px horizontal (left/right), 10px vertical (top/bottom)
+      const int inner_border_h = inner_border ? 5 : 0;
+      const int inner_border_v = inner_border ? 10 : 0;
+      int total_border_h = border_width + inner_border_h;
+      int total_border_v = border_width + inner_border_v;
+
+      int final_width, final_height;
+      calculate_scaled_dimensions(current_width, current_height, final_width, final_height, total_border_h);
+
+      std::optional<ImageBuffer> scaled_buffer;
+
+      if (final_width != current_width || final_height != current_height)
+      {
+        // Need to scale
+        scaled_buffer.emplace(final_width, final_height, channels);
+
+        if (!resize_image(current_data, current_width, current_height, channels,
+                          scaled_buffer->get(), final_width, final_height))
+        {
+          return {1, "Error: Failed to resize image"};
+        }
+
+        current_data = scaled_buffer->get();
+        current_width = final_width;
+        current_height = final_height;
+
+        std::cout << "Scaled to " << final_width << "x" << final_height;
+        if (total_border_h > 0 || total_border_v > 0)
+        {
+          std::cout << " (reserving " << total_border_h << "px H, " << total_border_v << "px V for border)";
+        }
+        std::cout << "\n";
+      }
+      else
+      {
+        std::cout << "Width within Instagram range, no scaling needed\n";
+      }
+
+      // Step 3: Add border if requested (after scaling to preserve original resolution)
       std::optional<ImageBuffer> inner_border_buffer;
       std::optional<ImageBuffer> border_buffer;
 
       if (border_width > 0)
       {
-        // Add inner black border if requested
+        // Add inner black border if requested (asymmetric: 5px H, 10px V)
         if (inner_border)
         {
-          const int inner_border_px = 10;
           int inner_width, inner_height;
-          calculate_bordered_dimensions(current_width, current_height, inner_border_px,
+          calculate_bordered_dimensions(current_width, current_height,
+                                        inner_border_h, inner_border_v,
                                         inner_width, inner_height);
 
           inner_border_buffer.emplace(inner_width, inner_height, channels);
           unsigned char black[4] = {0, 0, 0, 255};
 
           if (!add_border(current_data, current_width, current_height, channels,
-                          inner_border_buffer->get(), inner_border_px, black))
+                          inner_border_buffer->get(), inner_border_h, inner_border_v, black))
           {
             return {1, "Error: Failed to add inner border"};
           }
@@ -164,7 +215,7 @@ namespace vanity
           current_data = inner_border_buffer->get();
           current_width = inner_width;
           current_height = inner_height;
-          std::cout << "Added 10px black inner border\n";
+          std::cout << "Added " << inner_border_h << "px H, " << inner_border_v << "px V black inner border\n";
         }
 
         // Add white border
@@ -185,34 +236,6 @@ namespace vanity
         current_width = bordered_width;
         current_height = bordered_height;
         std::cout << "Added " << border_width << "px white border\n";
-      }
-
-      // Step 3: Scale to fit Instagram width requirements
-      int final_width, final_height;
-      calculate_scaled_dimensions(current_width, current_height, final_width, final_height);
-
-      std::optional<ImageBuffer> scaled_buffer;
-
-      if (final_width != current_width || final_height != current_height)
-      {
-        // Need to scale
-        scaled_buffer.emplace(final_width, final_height, channels);
-
-        if (!resize_image(current_data, current_width, current_height, channels,
-                          scaled_buffer->get(), final_width, final_height))
-        {
-          return {1, "Error: Failed to resize image"};
-        }
-
-        current_data = scaled_buffer->get();
-        current_width = final_width;
-        current_height = final_height;
-
-        std::cout << "Scaled to " << final_width << "x" << final_height << "\n";
-      }
-      else
-      {
-        std::cout << "Width within Instagram range, no scaling needed\n";
       }
 
       // Write output image
@@ -364,12 +387,12 @@ namespace vanity
       std::cout << "                (processes all JPEG and PNG files, saves as filename_insta.ext)\n\n";
       std::cout << "Options:\n";
       std::cout << "  --border <width>  Add a white border of specified width (in pixels)\n";
-      std::cout << "  --inner           Add a 10px black border inside the white border\n";
-      std::cout << "                    (requires --border)\n\n";
+      std::cout << "  --inner           Add a black border inside the white border\n";
+      std::cout << "                    (5px left/right, 10px top/bottom; requires --border)\n\n";
       std::cout << "Behavior:\n";
       std::cout << "  - If aspect ratio is outside Instagram's range, black padding is added\n";
-      std::cout << "  - Border is applied before scaling (so it fits within Instagram limits)\n";
-      std::cout << "  - Images are scaled to fit within 320-1080px width\n";
+      std::cout << "  - Images are scaled to fit within 320-1080px width (accounting for border)\n";
+      std::cout << "  - Border is applied after scaling (preserving original image resolution)\n";
       std::cout << "  - No cropping is performed\n";
     }
 

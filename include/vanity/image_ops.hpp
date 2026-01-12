@@ -9,6 +9,11 @@ namespace vanity
   void calculate_bordered_dimensions(int src_width, int src_height, int border_width,
                                      int &out_width, int &out_height);
 
+  // Calculate dimensions for bordered image with asymmetric borders
+  void calculate_bordered_dimensions(int src_width, int src_height,
+                                     int border_h, int border_v,
+                                     int &out_width, int &out_height);
+
   // Fill buffer with a single value
   void fill_buffer(unsigned char *buffer, size_t size, unsigned char value);
 
@@ -21,6 +26,12 @@ namespace vanity
   // Returns: true on success, false on invalid parameters
   bool add_border(const unsigned char *src, int src_width, int src_height, int channels,
                   unsigned char *dst, int border_width, const unsigned char border_color[4]);
+
+  // Add asymmetric border around image
+  // border_h: horizontal border (left and right) in pixels
+  // border_v: vertical border (top and bottom) in pixels
+  bool add_border(const unsigned char *src, int src_width, int src_height, int channels,
+                  unsigned char *dst, int border_h, int border_v, const unsigned char border_color[4]);
 
   // Resize image using bilinear interpolation
   // src: source image buffer
