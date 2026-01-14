@@ -288,6 +288,9 @@ bool add_gradient_border(const unsigned char* src, int src_width, int src_height
     // White color (gradient end)
     unsigned char end_color[4] = {255, 255, 255, 255};
 
+    // Calculate maximum diagonal distance for normalization
+    float max_diagonal = std::sqrt(static_cast<float>(new_width * new_width + new_height * new_height));
+
     // Fill border with gradient
     for (int y = 0; y < new_height; y++) {
         for (int x = 0; x < new_width; x++) {
@@ -298,15 +301,11 @@ bool add_gradient_border(const unsigned char* src, int src_width, int src_height
                              y < border_width || y >= src_height + border_width);
 
             if (in_border) {
-                // Calculate distance to nearest image edge
-                int dist_x = (x < border_width) ? x :
-                            (x >= src_width + border_width) ? (new_width - 1 - x) : border_width;
-                int dist_y = (y < border_width) ? y :
-                            (y >= src_height + border_width) ? (new_height - 1 - y) : border_width;
-                int dist = (dist_x < dist_y) ? dist_x : dist_y;
+                // Calculate diagonal distance from top-left corner
+                float diag_dist = std::sqrt(static_cast<float>(x * x + y * y));
 
-                // Calculate gradient factor (0.0 at image edge, 1.0 at outer edge)
-                float factor = static_cast<float>(dist) / border_width;
+                // Normalize to 0.0-1.0 range (0 at top-left, 1 at bottom-right)
+                float factor = diag_dist / max_diagonal;
 
                 // Interpolate between start_color and white
                 for (int c = 0; c < channels; c++) {
@@ -343,6 +342,9 @@ bool add_gradient_border(const unsigned char* src, int src_width, int src_height
     // White color (gradient end)
     unsigned char end_color[4] = {255, 255, 255, 255};
 
+    // Calculate maximum diagonal distance for normalization
+    float max_diagonal = std::sqrt(static_cast<float>(new_width * new_width + new_height * new_height));
+
     // Fill border with gradient
     for (int y = 0; y < new_height; y++) {
         for (int x = 0; x < new_width; x++) {
@@ -353,18 +355,11 @@ bool add_gradient_border(const unsigned char* src, int src_width, int src_height
                              y < border_v || y >= src_height + border_v);
 
             if (in_border) {
-                // Calculate distance to nearest image edge
-                int dist_x = (x < border_h) ? x :
-                            (x >= src_width + border_h) ? (new_width - 1 - x) : border_h;
-                int dist_y = (y < border_v) ? y :
-                            (y >= src_height + border_v) ? (new_height - 1 - y) : border_v;
+                // Calculate diagonal distance from top-left corner
+                float diag_dist = std::sqrt(static_cast<float>(x * x + y * y));
 
-                // Normalize distances based on their respective border widths
-                float norm_x = static_cast<float>(dist_x) / border_h;
-                float norm_y = static_cast<float>(dist_y) / border_v;
-
-                // Use minimum normalized distance for gradient
-                float factor = (norm_x < norm_y) ? norm_x : norm_y;
+                // Normalize to 0.0-1.0 range (0 at top-left, 1 at bottom-right)
+                float factor = diag_dist / max_diagonal;
 
                 // Interpolate between start_color and white
                 for (int c = 0; c < channels; c++) {
