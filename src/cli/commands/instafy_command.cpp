@@ -95,7 +95,7 @@ namespace vanity
     }
 
     CommandResult process_single_file(const char *input_path, const char *output_path,
-                                      int border_width, bool inner_border)
+                                      int border_width, bool inner_border, bool gradient)
     {
       // Load image
       int width, height, channels;
@@ -218,24 +218,49 @@ namespace vanity
           std::cout << "Added " << inner_border_h << "px H, " << inner_border_v << "px V black inner border\n";
         }
 
-        // Add white border
+        // Add white or gradient border
         int bordered_width, bordered_height;
         calculate_bordered_dimensions(current_width, current_height, border_width,
                                       bordered_width, bordered_height);
 
         border_buffer.emplace(bordered_width, bordered_height, channels);
-        unsigned char white[4] = {255, 255, 255, 255};
 
-        if (!add_border(current_data, current_width, current_height, channels,
-                        border_buffer->get(), border_width, white))
+        if (gradient)
         {
-          return {1, "Error: Failed to add border"};
-        }
+          // Calculate average color of the current image
+          unsigned char avg_color[4];
+          calculate_average_color(current_data, current_width, current_height, channels, avg_color);
 
-        current_data = border_buffer->get();
-        current_width = bordered_width;
-        current_height = bordered_height;
-        std::cout << "Added " << border_width << "px white border\n";
+          std::cout << "Average color: RGB(" << static_cast<int>(avg_color[0]) << ", "
+                    << static_cast<int>(avg_color[1]) << ", "
+                    << static_cast<int>(avg_color[2]) << ")\n";
+
+          if (!add_gradient_border(current_data, current_width, current_height, channels,
+                                   border_buffer->get(), border_width, avg_color))
+          {
+            return {1, "Error: Failed to add gradient border"};
+          }
+
+          current_data = border_buffer->get();
+          current_width = bordered_width;
+          current_height = bordered_height;
+          std::cout << "Added " << border_width << "px gradient border (average color to white)\n";
+        }
+        else
+        {
+          unsigned char white[4] = {255, 255, 255, 255};
+
+          if (!add_border(current_data, current_width, current_height, channels,
+                          border_buffer->get(), border_width, white))
+          {
+            return {1, "Error: Failed to add border"};
+          }
+
+          current_data = border_buffer->get();
+          current_width = bordered_width;
+          current_height = bordered_height;
+          std::cout << "Added " << border_width << "px white border\n";
+        }
       }
 
       // Write output image
@@ -258,6 +283,7 @@ namespace vanity
       // Parse flags and collect positional arguments
       int border_width = 0;
       bool inner_border = false;
+      bool gradient = false;
       std::vector<std::string> args;
 
       for (int i = 1; i < argc; i++)
@@ -275,6 +301,10 @@ namespace vanity
         {
           inner_border = true;
         }
+        else if (arg == "--gradient")
+        {
+          gradient = true;
+        }
         else
         {
           args.push_back(arg);
@@ -284,6 +314,11 @@ namespace vanity
       if (inner_border && border_width == 0)
       {
         return {1, "Error: --inner requires --border <width>"};
+      }
+
+      if (gradient && border_width == 0)
+      {
+        return {1, "Error: --gradient requires --border <width>"};
       }
 
       // Support two modes:
@@ -336,7 +371,8 @@ namespace vanity
                 input_file.string().c_str(),
                 output_file.string().c_str(),
                 border_width,
-                inner_border);
+                inner_border,
+                gradient);
 
             if (result.exit_code == 0)
             {
@@ -366,7 +402,7 @@ namespace vanity
         const char *input_path = args[0].c_str();
         const char *output_path = args[1].c_str();
 
-        return process_single_file(input_path, output_path, border_width, inner_border);
+        return process_single_file(input_path, output_path, border_width, inner_border, gradient);
       }
     }
 
@@ -387,6 +423,8 @@ namespace vanity
       std::cout << "                (processes all JPEG and PNG files, saves as filename_insta.ext)\n\n";
       std::cout << "Options:\n";
       std::cout << "  --border <width>  Add a white border of specified width (in pixels)\n";
+      std::cout << "  --gradient        Apply a gradient border from average image color to white\n";
+      std::cout << "                    (requires --border)\n";
       std::cout << "  --inner           Add a black border inside the white border\n";
       std::cout << "                    (5px left/right, 10px top/bottom; requires --border)\n\n";
       std::cout << "Behavior:\n";

@@ -245,4 +245,146 @@ bool add_padding(const unsigned char* src, int src_width, int src_height, int ch
     return true;
 }
 
+void calculate_average_color(const unsigned char* src, int width, int height, int channels,
+                              unsigned char avg_color[4]) {
+    if (!src || width <= 0 || height <= 0 || channels <= 0) {
+        // Default to white if invalid
+        avg_color[0] = avg_color[1] = avg_color[2] = avg_color[3] = 255;
+        return;
+    }
+
+    size_t total_pixels = static_cast<size_t>(width) * height;
+    unsigned long long sum[4] = {0, 0, 0, 0};
+
+    // Sum up all pixel values
+    for (size_t i = 0; i < total_pixels; i++) {
+        for (int c = 0; c < channels && c < 4; c++) {
+            sum[c] += src[i * channels + c];
+        }
+    }
+
+    // Calculate average
+    for (int c = 0; c < channels && c < 4; c++) {
+        avg_color[c] = static_cast<unsigned char>(sum[c] / total_pixels);
+    }
+
+    // Fill remaining channels with default values
+    for (int c = channels; c < 4; c++) {
+        avg_color[c] = (c == 3) ? 255 : 0; // Alpha = 255, others = 0
+    }
+}
+
+bool add_gradient_border(const unsigned char* src, int src_width, int src_height, int channels,
+                         unsigned char* dst, int border_width, const unsigned char start_color[4]) {
+    // Validate parameters
+    if (!src || !dst || border_width < 0 || src_width <= 0 || src_height <= 0 || channels <= 0) {
+        return false;
+    }
+
+    // Calculate new dimensions
+    int new_width = src_width + 2 * border_width;
+    int new_height = src_height + 2 * border_width;
+
+    // White color (gradient end)
+    unsigned char end_color[4] = {255, 255, 255, 255};
+
+    // Fill border with gradient
+    for (int y = 0; y < new_height; y++) {
+        for (int x = 0; x < new_width; x++) {
+            int dst_idx = (y * new_width + x) * channels;
+
+            // Check if this pixel is in the border region
+            bool in_border = (x < border_width || x >= src_width + border_width ||
+                             y < border_width || y >= src_height + border_width);
+
+            if (in_border) {
+                // Calculate distance to nearest image edge
+                int dist_x = (x < border_width) ? x :
+                            (x >= src_width + border_width) ? (new_width - 1 - x) : border_width;
+                int dist_y = (y < border_width) ? y :
+                            (y >= src_height + border_width) ? (new_height - 1 - y) : border_width;
+                int dist = (dist_x < dist_y) ? dist_x : dist_y;
+
+                // Calculate gradient factor (0.0 at image edge, 1.0 at outer edge)
+                float factor = static_cast<float>(dist) / border_width;
+
+                // Interpolate between start_color and white
+                for (int c = 0; c < channels; c++) {
+                    float value = start_color[c] * (1.0f - factor) + end_color[c] * factor;
+                    dst[dst_idx + c] = static_cast<unsigned char>(value + 0.5f);
+                }
+            } else {
+                // Copy source pixel
+                int src_x = x - border_width;
+                int src_y = y - border_width;
+                int src_idx = (src_y * src_width + src_x) * channels;
+
+                for (int c = 0; c < channels; c++) {
+                    dst[dst_idx + c] = src[src_idx + c];
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
+bool add_gradient_border(const unsigned char* src, int src_width, int src_height, int channels,
+                         unsigned char* dst, int border_h, int border_v, const unsigned char start_color[4]) {
+    // Validate parameters
+    if (!src || !dst || border_h < 0 || border_v < 0 || src_width <= 0 || src_height <= 0 || channels <= 0) {
+        return false;
+    }
+
+    // Calculate new dimensions
+    int new_width = src_width + 2 * border_h;
+    int new_height = src_height + 2 * border_v;
+
+    // White color (gradient end)
+    unsigned char end_color[4] = {255, 255, 255, 255};
+
+    // Fill border with gradient
+    for (int y = 0; y < new_height; y++) {
+        for (int x = 0; x < new_width; x++) {
+            int dst_idx = (y * new_width + x) * channels;
+
+            // Check if this pixel is in the border region
+            bool in_border = (x < border_h || x >= src_width + border_h ||
+                             y < border_v || y >= src_height + border_v);
+
+            if (in_border) {
+                // Calculate distance to nearest image edge
+                int dist_x = (x < border_h) ? x :
+                            (x >= src_width + border_h) ? (new_width - 1 - x) : border_h;
+                int dist_y = (y < border_v) ? y :
+                            (y >= src_height + border_v) ? (new_height - 1 - y) : border_v;
+
+                // Normalize distances based on their respective border widths
+                float norm_x = static_cast<float>(dist_x) / border_h;
+                float norm_y = static_cast<float>(dist_y) / border_v;
+
+                // Use minimum normalized distance for gradient
+                float factor = (norm_x < norm_y) ? norm_x : norm_y;
+
+                // Interpolate between start_color and white
+                for (int c = 0; c < channels; c++) {
+                    float value = start_color[c] * (1.0f - factor) + end_color[c] * factor;
+                    dst[dst_idx + c] = static_cast<unsigned char>(value + 0.5f);
+                }
+            } else {
+                // Copy source pixel
+                int src_x = x - border_h;
+                int src_y = y - border_v;
+                int src_idx = (src_y * src_width + src_x) * channels;
+
+                for (int c = 0; c < channels; c++) {
+                    dst[dst_idx + c] = src[src_idx + c];
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
 } // namespace vanity
