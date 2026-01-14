@@ -17,11 +17,8 @@ namespace vanity
   class InstafyCommand : public Command
   {
   private:
-    // Instagram aspect ratio limits
-    static constexpr float RATIO_LANDSCAPE = 1.91f; // 1.91:1 (wide)
-    static constexpr float RATIO_PORTRAIT = 0.75f;  // 3:4 (tall)
-    static constexpr int MIN_WIDTH = 320;
-    static constexpr int MAX_WIDTH = 1080;
+    // Target dimensions for all output images
+    static constexpr int TARGET_SIZE = 1080;
 
     bool is_supported_image_file(const std::filesystem::path &path) const
     {
@@ -30,65 +27,31 @@ namespace vanity
       return ext == ".jpg" || ext == ".jpeg" || ext == ".png";
     }
 
-    // Calculate target dimensions after padding to fit Instagram ratio
-    void calculate_padded_dimensions(int src_width, int src_height,
-                                     int &dst_width, int &dst_height) const
+    // Calculate dimensions to fit image into TARGET_SIZE x TARGET_SIZE while preserving aspect ratio
+    void calculate_fit_dimensions(int src_width, int src_height,
+                                  int &dst_width, int &dst_height) const
     {
       float ratio = static_cast<float>(src_width) / src_height;
 
-      if (ratio > RATIO_LANDSCAPE)
+      if (src_width > TARGET_SIZE || src_height > TARGET_SIZE)
       {
-        // Too wide - add vertical padding to reach 1.91:1
-        dst_width = src_width;
-        dst_height = static_cast<int>(std::ceil(src_width / RATIO_LANDSCAPE));
-      }
-      else if (ratio < RATIO_PORTRAIT)
-      {
-        // Too tall - add horizontal padding to reach 3:4 (0.75)
-        dst_height = src_height;
-        dst_width = static_cast<int>(std::ceil(src_height * RATIO_PORTRAIT));
-      }
-      else
-      {
-        // Within Instagram's supported range - no padding needed
-        dst_width = src_width;
-        dst_height = src_height;
-      }
-    }
-
-    // Calculate final dimensions after scaling to fit Instagram width requirements
-    // total_border: combined border thickness (inner + outer) to reserve space for border
-    void calculate_scaled_dimensions(int src_width, int src_height,
-                                     int &dst_width, int &dst_height,
-                                     int total_border = 0) const
-    {
-      // Account for border space in the target dimensions
-      int effective_max = MAX_WIDTH - 2 * total_border;
-      int effective_min = MIN_WIDTH - 2 * total_border;
-
-      // Ensure minimums stay reasonable
-      if (effective_max < 1)
-        effective_max = 1;
-      if (effective_min < 1)
-        effective_min = 1;
-
-      if (src_width > effective_max)
-      {
-        // Scale down to effective max width (leaving room for border)
-        float scale = static_cast<float>(effective_max) / src_width;
-        dst_width = effective_max;
-        dst_height = static_cast<int>(std::round(src_height * scale));
-      }
-      else if (src_width < effective_min)
-      {
-        // Scale up to effective min width
-        float scale = static_cast<float>(effective_min) / src_width;
-        dst_width = effective_min;
-        dst_height = static_cast<int>(std::round(src_height * scale));
+        // Image is larger than target - scale down to fit
+        if (src_width >= src_height)
+        {
+          // Landscape or square - width is limiting dimension
+          dst_width = TARGET_SIZE;
+          dst_height = static_cast<int>(std::round(TARGET_SIZE / ratio));
+        }
+        else
+        {
+          // Portrait - height is limiting dimension
+          dst_height = TARGET_SIZE;
+          dst_width = static_cast<int>(std::round(TARGET_SIZE * ratio));
+        }
       }
       else
       {
-        // Width is within range - keep as is
+        // Image is smaller than target - keep original size
         dst_width = src_width;
         dst_height = src_height;
       }
@@ -113,112 +76,135 @@ namespace vanity
       std::cout << "Loaded image: " << width << "x" << height
                 << " with " << channels << " channels\n";
 
-      float original_ratio = static_cast<float>(width) / height;
-      std::cout << "Original aspect ratio: " << original_ratio << "\n";
-
-      // Step 1: Calculate if padding is needed
-      int padded_width, padded_height;
-      calculate_padded_dimensions(width, height, padded_width, padded_height);
-
       unsigned char *current_data = img.get();
       int current_width = width;
       int current_height = height;
-      std::optional<ImageBuffer> padded_buffer;
 
-      if (padded_width != width || padded_height != height)
-      {
-        // Need to add padding
-        padded_buffer.emplace(padded_width, padded_height, channels);
-        unsigned char black[4] = {0, 0, 0, 255};
-
-        if (!add_padding(img.get(), width, height, channels,
-                         padded_buffer->get(), padded_width, padded_height, black))
-        {
-          return {1, "Error: Failed to add padding"};
-        }
-
-        current_data = padded_buffer->get();
-        current_width = padded_width;
-        current_height = padded_height;
-
-        float target_ratio = (original_ratio > RATIO_LANDSCAPE) ? RATIO_LANDSCAPE : RATIO_PORTRAIT;
-        std::cout << "Added padding to reach aspect ratio " << target_ratio
-                  << " (" << padded_width << "x" << padded_height << ")\n";
-      }
-      else
-      {
-        std::cout << "Aspect ratio within Instagram range, no padding needed\n";
-      }
-
-      // Step 2: Scale to fit Instagram width requirements (reserving space for border)
-      // Inner border is asymmetric: 5px horizontal (left/right), 10px vertical (top/bottom)
+      // Calculate border dimensions
       const int inner_border_h = inner_border ? 5 : 0;
       const int inner_border_v = inner_border ? 10 : 0;
-      int total_border_h = border_width + inner_border_h;
-      int total_border_v = border_width + inner_border_v;
 
-      int final_width, final_height;
-      calculate_scaled_dimensions(current_width, current_height, final_width, final_height, total_border_h);
+      // Step 1: Add inner border if requested (wraps actual image content)
+      std::optional<ImageBuffer> inner_border_buffer;
+
+      if (inner_border)
+      {
+        int inner_width, inner_height;
+        calculate_bordered_dimensions(current_width, current_height,
+                                      inner_border_h, inner_border_v,
+                                      inner_width, inner_height);
+
+        inner_border_buffer.emplace(inner_width, inner_height, channels);
+        unsigned char black[4] = {0, 0, 0, 255};
+
+        if (!add_border(current_data, current_width, current_height, channels,
+                        inner_border_buffer->get(), inner_border_h, inner_border_v, black))
+        {
+          return {1, "Error: Failed to add inner border"};
+        }
+
+        current_data = inner_border_buffer->get();
+        current_width = inner_width;
+        current_height = inner_height;
+        std::cout << "Added " << inner_border_h << "px H, " << inner_border_v << "px V black inner border (wrapping original content)\n";
+      }
+
+      // Calculate the content area size (accounting for outer border only)
+      const int total_border_h = (border_width * 2);
+      const int total_border_v = (border_width * 2);
+      const int content_width = TARGET_SIZE - total_border_h;
+      const int content_height = TARGET_SIZE - total_border_v;
+
+      std::cout << "Content area will be: " << content_width << "x" << content_height << "\n";
+
+      // Step 2: Scale image to fit within the content area
+      int fitted_width, fitted_height;
+      {
+        float ratio = static_cast<float>(current_width) / current_height;
+
+        if (current_width > content_width || current_height > content_height)
+        {
+          // Image is larger than content area - scale down to fit
+          if (current_width >= current_height)
+          {
+            // Landscape or square - width is limiting dimension
+            fitted_width = content_width;
+            fitted_height = static_cast<int>(std::round(content_width / ratio));
+
+            // Ensure height also fits
+            if (fitted_height > content_height)
+            {
+              fitted_height = content_height;
+              fitted_width = static_cast<int>(std::round(content_height * ratio));
+            }
+          }
+          else
+          {
+            // Portrait - height is limiting dimension
+            fitted_height = content_height;
+            fitted_width = static_cast<int>(std::round(content_height * ratio));
+
+            // Ensure width also fits
+            if (fitted_width > content_width)
+            {
+              fitted_width = content_width;
+              fitted_height = static_cast<int>(std::round(content_width / ratio));
+            }
+          }
+        }
+        else
+        {
+          // Image is smaller than content area - keep original size
+          fitted_width = current_width;
+          fitted_height = current_height;
+        }
+      }
 
       std::optional<ImageBuffer> scaled_buffer;
 
-      if (final_width != current_width || final_height != current_height)
+      if (fitted_width != current_width || fitted_height != current_height)
       {
-        // Need to scale
-        scaled_buffer.emplace(final_width, final_height, channels);
+        scaled_buffer.emplace(fitted_width, fitted_height, channels);
 
         if (!resize_image(current_data, current_width, current_height, channels,
-                          scaled_buffer->get(), final_width, final_height))
+                          scaled_buffer->get(), fitted_width, fitted_height))
         {
           return {1, "Error: Failed to resize image"};
         }
 
         current_data = scaled_buffer->get();
-        current_width = final_width;
-        current_height = final_height;
+        current_width = fitted_width;
+        current_height = fitted_height;
 
-        std::cout << "Scaled to " << final_width << "x" << final_height;
-        if (total_border_h > 0 || total_border_v > 0)
-        {
-          std::cout << " (reserving " << total_border_h << "px H, " << total_border_v << "px V for border)";
-        }
-        std::cout << "\n";
+        std::cout << "Scaled to " << fitted_width << "x" << fitted_height << " to fit within content area\n";
       }
-      else
+
+      // Step 3: Add padding to center within content area
+      std::optional<ImageBuffer> padded_buffer;
+      unsigned char padding_color[4] = {255, 255, 255, 255}; // White padding
+
+      if (current_width != content_width || current_height != content_height)
       {
-        std::cout << "Width within Instagram range, no scaling needed\n";
+        padded_buffer.emplace(content_width, content_height, channels);
+
+        if (!add_padding(current_data, current_width, current_height, channels,
+                         padded_buffer->get(), content_width, content_height, padding_color))
+        {
+          return {1, "Error: Failed to add padding"};
+        }
+
+        current_data = padded_buffer->get();
+        current_width = content_width;
+        current_height = content_height;
+
+        std::cout << "Added padding to center within " << content_width << "x" << content_height << " content area\n";
       }
 
-      // Step 3: Add border if requested (after scaling to preserve original resolution)
-      std::optional<ImageBuffer> inner_border_buffer;
+      // Step 4: Add outer border (white or gradient) if requested
       std::optional<ImageBuffer> border_buffer;
 
       if (border_width > 0)
       {
-        // Add inner black border if requested (asymmetric: 5px H, 10px V)
-        if (inner_border)
-        {
-          int inner_width, inner_height;
-          calculate_bordered_dimensions(current_width, current_height,
-                                        inner_border_h, inner_border_v,
-                                        inner_width, inner_height);
-
-          inner_border_buffer.emplace(inner_width, inner_height, channels);
-          unsigned char black[4] = {0, 0, 0, 255};
-
-          if (!add_border(current_data, current_width, current_height, channels,
-                          inner_border_buffer->get(), inner_border_h, inner_border_v, black))
-          {
-            return {1, "Error: Failed to add inner border"};
-          }
-
-          current_data = inner_border_buffer->get();
-          current_width = inner_width;
-          current_height = inner_height;
-          std::cout << "Added " << inner_border_h << "px H, " << inner_border_v << "px V black inner border\n";
-        }
-
-        // Add white or gradient border
         int bordered_width, bordered_height;
         calculate_bordered_dimensions(current_width, current_height, border_width,
                                       bordered_width, bordered_height);
@@ -227,9 +213,10 @@ namespace vanity
 
         if (gradient)
         {
-          // Calculate average color of the current image
+          // For gradient, we want to use the original image data (before any borders/padding)
+          // Always use the original loaded image for color calculation
           unsigned char avg_color[4];
-          calculate_average_color(current_data, current_width, current_height, channels, avg_color);
+          calculate_average_color(img.get(), width, height, channels, avg_color);
 
           std::cout << "Average color: RGB(" << static_cast<int>(avg_color[0]) << ", "
                     << static_cast<int>(avg_color[1]) << ", "
@@ -241,26 +228,32 @@ namespace vanity
             return {1, "Error: Failed to add gradient border"};
           }
 
-          current_data = border_buffer->get();
-          current_width = bordered_width;
-          current_height = bordered_height;
           std::cout << "Added " << border_width << "px gradient border (average color to white)\n";
         }
         else
         {
-          unsigned char white[4] = {255, 255, 255, 255};
+          unsigned char border_color[4] = {255, 255, 255, 255}; // White border
 
           if (!add_border(current_data, current_width, current_height, channels,
-                          border_buffer->get(), border_width, white))
+                          border_buffer->get(), border_width, border_color))
           {
             return {1, "Error: Failed to add border"};
           }
 
-          current_data = border_buffer->get();
-          current_width = bordered_width;
-          current_height = bordered_height;
           std::cout << "Added " << border_width << "px white border\n";
         }
+
+        current_data = border_buffer->get();
+        current_width = bordered_width;
+        current_height = bordered_height;
+      }
+
+      // Verify we reached the target size
+      if (current_width != TARGET_SIZE || current_height != TARGET_SIZE)
+      {
+        return {1, "Error: Final image size mismatch - expected " +
+                 std::to_string(TARGET_SIZE) + "x" + std::to_string(TARGET_SIZE) +
+                 " but got " + std::to_string(current_width) + "x" + std::to_string(current_height)};
       }
 
       // Write output image
@@ -411,10 +404,7 @@ namespace vanity
       std::cout << "Usage:\n";
       std::cout << "  " << program_name << " <input_image> <output_image> [options]\n";
       std::cout << "  " << program_name << " <directory> [options]\n\n";
-      std::cout << "Prepares images for Instagram by adjusting aspect ratio and dimensions.\n\n";
-      std::cout << "Instagram requirements:\n";
-      std::cout << "  - Width: 320-1080 pixels\n";
-      std::cout << "  - Aspect ratio: between 1.91:1 (landscape) and 3:4 (portrait)\n\n";
+      std::cout << "Converts images to consistent 1080x1080 format for Instagram.\n\n";
       std::cout << "File mode:\n";
       std::cout << "  input_image:  Path to the input image file\n";
       std::cout << "  output_image: Path to save the output image\n\n";
@@ -428,9 +418,10 @@ namespace vanity
       std::cout << "  --inner           Add a black border inside the white border\n";
       std::cout << "                    (5px left/right, 10px top/bottom; requires --border)\n\n";
       std::cout << "Behavior:\n";
-      std::cout << "  - If aspect ratio is outside Instagram's range, black padding is added\n";
-      std::cout << "  - Images are scaled to fit within 320-1080px width (accounting for border)\n";
-      std::cout << "  - Border is applied after scaling (preserving original image resolution)\n";
+      std::cout << "  - All output images are exactly 1080x1080 pixels\n";
+      std::cout << "  - Original image is scaled to fit within the content area\n";
+      std::cout << "  - White padding is added within the content area to center the image\n";
+      std::cout << "  - Borders are added around the padded content\n";
       std::cout << "  - No cropping is performed\n";
     }
 
@@ -441,7 +432,7 @@ namespace vanity
 
     const char *description() const override
     {
-      return "Prepare images for Instagram (adjust aspect ratio and dimensions)";
+      return "Convert images to consistent 1080x1080 format for Instagram";
     }
   };
 
